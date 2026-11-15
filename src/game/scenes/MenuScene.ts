@@ -1,5 +1,6 @@
 import Phaser from "phaser";
-import { SceneKey, TextureKey } from "../keys";
+import { SceneKey, Season, TextureKey } from "../keys";
+import { SEASON_THEMES } from "../seasons";
 
 export class MenuScene extends Phaser.Scene {
   private isStarting: boolean = false;
@@ -13,7 +14,7 @@ export class MenuScene extends Phaser.Scene {
 
     const { width, height } = this.scale;
 
-    this.cameras.main.setBackgroundColor(0xbfe8ff);
+    this.cameras.main.setBackgroundColor(SEASON_THEMES[Season.Spring].sky);
     this.cameras.main.fadeIn(400, 0, 0, 0);
 
     const title = this.add
