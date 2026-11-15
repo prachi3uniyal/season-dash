@@ -1,10 +1,11 @@
 import Phaser from "phaser";
+import { playChime } from "../audio";
 import { COIN_POINTS, GAME_HEIGHT, GAME_WIDTH, GROUND_HEIGHT, GROUND_TOP, JUMP_SPEED, PLATFORM_HEIGHT, RUN_SPEED, WORLD_WIDTH } from "../config";
-import { GameStatus, SceneKey, TextureKey,AnimKey } from "../keys";
+import { AnimKey, GameStatus, SceneKey, Season, TextureKey } from "../keys";
 import { getCoinPositions, PLATFORMS } from "../levelData";
+import { getSeasonAtX, SEASON_THEMES } from "../seasons";
 import { getInitialHudState } from "../state";
-import type { HudState } from "../types";
-
+import type { HudState, SeasonTheme } from "../types";
 
 export class GameScene extends Phaser.Scene {
   private alice!: Phaser.Physics.Arcade.Sprite;
@@ -16,6 +17,9 @@ export class GameScene extends Phaser.Scene {
   private hills!: Phaser.GameObjects.TileSprite;
   private clouds!: Phaser.GameObjects.TileSprite;
   private scoreText!: Phaser.GameObjects.Text;
+  private weather: Phaser.GameObjects.Particles.ParticleEmitter | undefined;
+  private skyTween: Phaser.Tweens.Tween | undefined;
+  private currentSky: number = SEASON_THEMES[Season.Spring].sky;
   private hud: HudState = getInitialHudState();
 
   constructor() {
@@ -28,7 +32,8 @@ export class GameScene extends Phaser.Scene {
 
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, GAME_HEIGHT);
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, GAME_HEIGHT);
-    this.cameras.main.setBackgroundColor(0xbfe8ff);
+    this.currentSky = SEASON_THEMES[Season.Spring].sky;
+    this.cameras.main.setBackgroundColor(this.currentSky);
     this.cameras.main.fadeIn(400, 0, 0, 0);
 
     this.createBackground();
@@ -39,6 +44,7 @@ export class GameScene extends Phaser.Scene {
     this.createInput();
     this.createColliders();
     this.createScoreText();
+    this.applySeason(Season.Spring, false);
   }
 
   update(): void {
@@ -49,6 +55,7 @@ export class GameScene extends Phaser.Scene {
     if (this.hud.status !== GameStatus.Playing) return;
 
     this.handleMovement();
+    this.handleSeasonZones();
   }
 
   private createBackground(): void {
@@ -57,7 +64,6 @@ export class GameScene extends Phaser.Scene {
       .tileSprite(0, GROUND_TOP, GAME_WIDTH, 180, TextureKey.Hills)
       .setOrigin(0, 1)
       .setScrollFactor(0)
-      .setTint(0xa5d6a7)
       .setDepth(-10);
   }
 
@@ -66,12 +72,10 @@ export class GameScene extends Phaser.Scene {
 
     const ground = this.platforms.create(WORLD_WIDTH / 2, GROUND_TOP + GROUND_HEIGHT / 2, TextureKey.Ground);
     ground.setDisplaySize(WORLD_WIDTH, GROUND_HEIGHT).refreshBody();
-    ground.setTint(0x7cc576);
 
     PLATFORMS.forEach((data) => {
       const platform = this.platforms.create(data.x, data.top + PLATFORM_HEIGHT / 2, TextureKey.Ground);
       platform.setDisplaySize(data.width, PLATFORM_HEIGHT).refreshBody();
-      platform.setTint(0x7cc576);
     });
   }
 
@@ -149,21 +153,108 @@ export class GameScene extends Phaser.Scene {
     } else {
       this.alice.setVelocityX(0);
     }
-    const onGround = body.blocked.down;
-
-    if (!onGround) {
-    this.alice.anims.play(AnimKey.AliceJump, true);
-    } else if (body.velocity.x !== 0) {
-    this.alice.anims.play(AnimKey.AliceWalk, true);
-    } else {
-    this.alice.anims.play(AnimKey.AliceIdle, true);
-    }
 
     const wantsJump = Phaser.Input.Keyboard.JustDown(this.cursors.up) || Phaser.Input.Keyboard.JustDown(this.jumpKey);
 
     if (wantsJump && body.blocked.down) {
       this.alice.setVelocityY(-JUMP_SPEED);
     }
+
+    const onGround = body.blocked.down;
+
+    if (!onGround) {
+      this.alice.anims.play(AnimKey.AliceJump, true);
+    } else if (body.velocity.x !== 0) {
+      this.alice.anims.play(AnimKey.AliceWalk, true);
+    } else {
+      this.alice.anims.play(AnimKey.AliceIdle, true);
+    }
+  }
+
+  private handleSeasonZones(): void {
+    const season = getSeasonAtX(this.alice.x);
+    if (season !== this.hud.season) this.applySeason(season, true);
+  }
+
+  private applySeason(season: Season, announce: boolean): void {
+    const theme = SEASON_THEMES[season];
+    this.hud.season = season;
+
+    this.tweenSkyTo(theme.sky);
+    this.hills.setTint(theme.hillsTint);
+    this.platforms.getChildren().forEach((child) => {
+      (child as Phaser.GameObjects.Image).setTint(theme.groundTint);
+    });
+    this.buildWeather(theme);
+
+    if (announce) {
+      this.showSeasonBanner(theme.label);
+      playChime(this.sound, theme.chime);
+    }
+  }
+
+  private tweenSkyTo(target: number): void {
+    this.skyTween?.stop();
+
+    const from = Phaser.Display.Color.ValueToColor(this.currentSky);
+    const to = Phaser.Display.Color.ValueToColor(target);
+
+    this.skyTween = this.tweens.addCounter({
+      from: 0,
+      to: 100,
+      duration: 700,
+      onUpdate: (tween: Phaser.Tweens.Tween) => {
+        const mixed = Phaser.Display.Color.Interpolate.ColorWithColor(from, to, 100, tween.getValue() ?? 0);
+        this.cameras.main.setBackgroundColor(Phaser.Display.Color.GetColor(mixed.r, mixed.g, mixed.b));
+      },
+      onComplete: () => {
+        this.currentSky = target;
+      },
+    });
+  }
+
+  private buildWeather(theme: SeasonTheme): void {
+    this.weather?.destroy();
+
+    this.weather = this.add
+      .particles(0, 0, TextureKey.Petal, {
+        x: { min: 0, max: GAME_WIDTH },
+        y: theme.spawnY,
+        lifespan: theme.lifespan,
+        speedX: theme.speedX,
+        speedY: theme.speedY,
+        scale: { start: 0.7, end: 0.5 },
+        alpha: { start: 0.9, end: 0.3 },
+        tint: theme.particleTint,
+        frequency: theme.frequency,
+        quantity: 1,
+      })
+      .setScrollFactor(0)
+      .setDepth(7);
+  }
+
+  private showSeasonBanner(label: string): void {
+    const banner = this.add
+      .text(GAME_WIDTH / 2, 90, label, {
+        fontFamily: "Georgia, serif",
+        fontSize: "52px",
+        color: "#ffffff",
+        stroke: "#3b5b8c",
+        strokeThickness: 8,
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(30)
+      .setScale(0);
+
+    this.tweens.chain({
+      targets: banner,
+      tweens: [
+        { scale: 1, duration: 350, ease: "Back.easeOut" },
+        { alpha: 0, duration: 600, delay: 700 },
+      ],
+      onComplete: () => banner.destroy(),
+    });
   }
 
   private onCollectCoin: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback = (_aliceObject, coinObject) => {
