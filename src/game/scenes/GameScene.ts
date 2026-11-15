@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { playChime } from "../audio";
-import { COIN_POINTS, GAME_HEIGHT, GAME_WIDTH, GROUND_HEIGHT, GROUND_TOP, JUMP_SPEED, PLATFORM_HEIGHT, RUN_SPEED, WORLD_WIDTH } from "../config";
+import { COIN_POINTS, GAME_HEIGHT, GAME_WIDTH, GROUND_HEIGHT, GROUND_TOP, HAZARD_SPAWN_DELAY, JUMP_SPEED, PLATFORM_HEIGHT, RUN_SPEED, WORLD_WIDTH } from "../config";
 import { AnimKey, GameStatus, SceneKey, Season, TextureKey } from "../keys";
 import { getCoinPositions, PLATFORMS } from "../levelData";
 import { getSeasonAtX, SEASON_THEMES } from "../seasons";
@@ -11,6 +11,7 @@ export class GameScene extends Phaser.Scene {
   private alice!: Phaser.Physics.Arcade.Sprite;
   private platforms!: Phaser.Physics.Arcade.StaticGroup;
   private coins!: Phaser.Physics.Arcade.Group;
+  private hazards!: Phaser.Physics.Arcade.Group;
   private door!: Phaser.Physics.Arcade.Image;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private jumpKey!: Phaser.Input.Keyboard.Key;
@@ -21,6 +22,7 @@ export class GameScene extends Phaser.Scene {
   private skyTween: Phaser.Tweens.Tween | undefined;
   private currentSky: number = SEASON_THEMES[Season.Spring].sky;
   private hud: HudState = getInitialHudState();
+  private isInvulnerable: boolean = false;
 
   constructor() {
     super({ key: SceneKey.Game });
@@ -29,6 +31,7 @@ export class GameScene extends Phaser.Scene {
   create(): void {
     this.physics.resume();
     this.hud = getInitialHudState();
+    this.isInvulnerable = false;
 
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, GAME_HEIGHT);
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, GAME_HEIGHT);
@@ -41,6 +44,7 @@ export class GameScene extends Phaser.Scene {
     this.createCoins();
     this.createDoor();
     this.createAlice();
+    this.createHazards();
     this.createInput();
     this.createColliders();
     this.createScoreText();
@@ -120,6 +124,17 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.startFollow(this.alice, true, 0.1, 0.1);
   }
 
+  private createHazards(): void {
+    this.hazards = this.physics.add.group({ allowGravity: false });
+
+    this.time.addEvent({
+      delay: HAZARD_SPAWN_DELAY,
+      loop: true,
+      callback: this.spawnHazard,
+      callbackScope: this,
+    });
+  }
+
   private createInput(): void {
     const keyboard = this.input.keyboard!;
     this.cursors = keyboard.createCursorKeys();
@@ -128,6 +143,8 @@ export class GameScene extends Phaser.Scene {
 
   private createColliders(): void {
     this.physics.add.collider(this.alice, this.platforms);
+    this.physics.add.collider(this.hazards, this.platforms, this.onHazardLanded, undefined, this);
+    this.physics.add.overlap(this.alice, this.hazards, this.onHitByCard, undefined, this);
     this.physics.add.overlap(this.alice, this.coins, this.onCollectCoin, undefined, this);
     this.physics.add.overlap(this.alice, this.door, this.onReachDoor, undefined, this);
   }
@@ -257,6 +274,22 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  private spawnHazard(): void {
+    if (this.hud.status !== GameStatus.Playing) return;
+
+    const camera = this.cameras.main;
+    const x = Phaser.Math.Between(camera.scrollX + 40, camera.scrollX + GAME_WIDTH - 40);
+    const card = this.hazards.create(x, -30, TextureKey.Card) as Phaser.Physics.Arcade.Sprite;
+
+    card.setDepth(4);
+    card.setVelocity(Phaser.Math.Between(-30, 30), Phaser.Math.Between(150, 240));
+    card.setAngularVelocity(Phaser.Math.Between(-120, 120));
+  }
+
+  private onHazardLanded: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback = (hazardObject) => {
+    hazardObject.destroy();
+  };
+
   private onCollectCoin: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback = (_aliceObject, coinObject) => {
     const coin = coinObject as Phaser.Physics.Arcade.Sprite;
 
@@ -268,14 +301,54 @@ export class GameScene extends Phaser.Scene {
     this.refreshScoreText();
   };
 
+  private onHitByCard: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback = (_aliceObject, cardObject) => {
+    cardObject.destroy();
+
+    if (this.isInvulnerable || this.hud.status !== GameStatus.Playing) return;
+
+    this.hud.lives -= 1;
+    this.cameras.main.shake(200, 0.01);
+    this.refreshScoreText();
+
+    if (this.hud.lives <= 0) {
+      this.endGame(GameStatus.Lost);
+      return;
+    }
+
+    this.isInvulnerable = true;
+    this.tweens.add({
+      targets: this.alice,
+      alpha: 0.25,
+      duration: 100,
+      yoyo: true,
+      repeat: 7,
+      onComplete: () => {
+        this.alice.setAlpha(1);
+        this.isInvulnerable = false;
+      },
+    });
+  };
+
   private onReachDoor: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback = () => {
     if (this.hud.status !== GameStatus.Playing) return;
+    this.endGame(GameStatus.Won);
+  };
 
-    this.hud.status = GameStatus.Won;
+  private endGame(status: GameStatus): void {
+    this.hud.status = status;
+
+    this.alice.setVelocity(0, 0);
     this.physics.pause();
+    this.alice.anims.play(AnimKey.AliceIdle, true);
+
+    if (status === GameStatus.Lost) {
+      this.alice.setTint(0xff6b6b);
+    }
+
+    const message = status === GameStatus.Won ? "You reached the door!" : "The Queen's cards got you";
 
     this.add
-      .text(GAME_WIDTH / 2, GAME_HEIGHT / 2, "You reached the door!", {
+      .text(GAME_WIDTH / 2, GAME_HEIGHT / 2, message, {
         fontFamily: "Georgia, serif",
         fontSize: "40px",
         color: "#ffffff",
@@ -285,9 +358,9 @@ export class GameScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setScrollFactor(0)
       .setDepth(30);
-  };
+  }
 
   private refreshScoreText(): void {
-    this.scoreText.setText(`Score: ${this.hud.score}   Watches: ${this.hud.coins}/${this.hud.totalCoins}`);
+    this.scoreText.setText(`Score: ${this.hud.score}   Watches: ${this.hud.coins}/${this.hud.totalCoins}   Lives: ${this.hud.lives}`);
   }
 }
