@@ -1,9 +1,12 @@
 import Phaser from "phaser";
-import { GAME_WIDTH, GROUND_HEIGHT, GROUND_TOP, PLATFORM_HEIGHT, WORLD_WIDTH } from "../config";
+import { GAME_WIDTH, GROUND_HEIGHT, GROUND_TOP, PLATFORM_HEIGHT, RUN_SPEED, WORLD_WIDTH } from "../config";
 import { SceneKey, TextureKey } from "../keys";
 import { getCoinPositions, PLATFORMS } from "../levelData";
 
 export class GameScene extends Phaser.Scene {
+  private alice!: Phaser.GameObjects.Image;
+  private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
+
   constructor() {
     super({ key: SceneKey.Game });
   }
@@ -31,6 +34,20 @@ export class GameScene extends Phaser.Scene {
     });
 
     this.add.image(WORLD_WIDTH - 90, GROUND_TOP - 38, TextureKey.Door);
-    this.add.image(80, GROUND_TOP - 24, TextureKey.AliceIdle).setDepth(5);
+
+    this.alice = this.add.image(80, GROUND_TOP - 24, TextureKey.AliceIdle).setDepth(5);
+    this.cursors = this.input.keyboard!.createCursorKeys();
+  }
+
+  update(_time: number, delta: number): void {
+    const distance = RUN_SPEED * (delta / 1000);
+
+    if (this.cursors.left.isDown) {
+      this.alice.x -= distance;
+      this.alice.setFlipX(true);
+    } else if (this.cursors.right.isDown) {
+      this.alice.x += distance;
+      this.alice.setFlipX(false);
+    }
   }
 }
