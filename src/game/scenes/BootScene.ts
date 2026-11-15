@@ -1,7 +1,8 @@
 import Phaser from "phaser";
-import { SceneKey } from "../keys";
-import { createAllTextures } from "../textures";
 import { createAnimations } from "../animations";
+import { RegistryKey, SceneKey } from "../keys";
+import { loadHighScore } from "../storage";
+import { createAllTextures } from "../textures";
 
 export class BootScene extends Phaser.Scene {
   constructor() {
@@ -24,9 +25,10 @@ export class BootScene extends Phaser.Scene {
     });
   }
 
- create(): void {
-  createAllTextures(this);
-  createAnimations(this.anims);
-  this.scene.start(SceneKey.Menu);
-}
+  create(): void {
+    createAllTextures(this);
+    createAnimations(this.anims);
+    this.registry.set(RegistryKey.HighScore, loadHighScore());
+    this.scene.start(SceneKey.Menu);
+  }
 }

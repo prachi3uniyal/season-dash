@@ -1,10 +1,24 @@
 import Phaser from "phaser";
 import { playChime, playTone } from "../audio";
-import { COIN_POINTS, GAME_HEIGHT, GAME_WIDTH, GROUND_HEIGHT, GROUND_TOP, HAZARD_SPAWN_DELAY, JUMP_SPEED, PLATFORM_HEIGHT, RUN_SPEED, WORLD_WIDTH } from "../config";
-import { AnimKey, GameStatus, SceneKey, Season, TextureKey } from "../keys";
+import {
+  COIN_POINTS,
+  GAME_HEIGHT,
+  GAME_WIDTH,
+  GROUND_HEIGHT,
+  GROUND_TOP,
+  HAZARD_SPAWN_DELAY,
+  JUMP_SPEED,
+  PLATFORM_HEIGHT,
+  RUN_SPEED,
+  SEASON_WIDTH,
+  WORLD_WIDTH,
+} from "../config";
+import { eventBus } from "../eventBus";
+import { AnimKey, GameEvent, GameStatus, RegistryKey, SceneKey, Season, TextureKey } from "../keys";
 import { getCoinPositions, PLATFORMS } from "../levelData";
-import { getSeasonAtX, SEASON_THEMES } from "../seasons";
+import { getSeasonAtX, SEASON_ORDER, SEASON_THEMES } from "../seasons";
 import { getInitialHudState } from "../state";
+import { saveHighScore } from "../storage";
 import type { HudState, SeasonTheme } from "../types";
 
 export class GameScene extends Phaser.Scene {
@@ -17,7 +31,6 @@ export class GameScene extends Phaser.Scene {
   private jumpKey!: Phaser.Input.Keyboard.Key;
   private hills!: Phaser.GameObjects.TileSprite;
   private clouds!: Phaser.GameObjects.TileSprite;
-  private scoreText!: Phaser.GameObjects.Text;
   private sparkles!: Phaser.GameObjects.Particles.ParticleEmitter;
   private weather: Phaser.GameObjects.Particles.ParticleEmitter | undefined;
   private skyTween: Phaser.Tweens.Tween | undefined;
@@ -31,12 +44,15 @@ export class GameScene extends Phaser.Scene {
 
   create(): void {
     this.physics.resume();
+
     this.hud = getInitialHudState();
+    this.hud.highScore = (this.registry.get(RegistryKey.HighScore) as number | undefined) ?? 0;
+    this.hud.muted = this.sound.mute;
     this.isInvulnerable = false;
+    this.currentSky = SEASON_THEMES[Season.Spring].sky;
 
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, GAME_HEIGHT);
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, GAME_HEIGHT);
-    this.currentSky = SEASON_THEMES[Season.Spring].sky;
     this.cameras.main.setBackgroundColor(this.currentSky);
     this.cameras.main.fadeIn(400, 0, 0, 0);
 
@@ -49,7 +65,9 @@ export class GameScene extends Phaser.Scene {
     this.createEffects();
     this.createInput();
     this.createColliders();
-    this.createScoreText();
+    this.createBridge();
+
+    this.hud.totalCoins = this.coins.getLength();
     this.applySeason(Season.Spring, false);
   }
 
@@ -66,11 +84,7 @@ export class GameScene extends Phaser.Scene {
 
   private createBackground(): void {
     this.clouds = this.add.tileSprite(0, 20, GAME_WIDTH, 100, TextureKey.Clouds).setOrigin(0, 0).setScrollFactor(0).setDepth(-20);
-    this.hills = this.add
-      .tileSprite(0, GROUND_TOP, GAME_WIDTH, 180, TextureKey.Hills)
-      .setOrigin(0, 1)
-      .setScrollFactor(0)
-      .setDepth(-10);
+    this.hills = this.add.tileSprite(0, GROUND_TOP, GAME_WIDTH, 180, TextureKey.Hills).setOrigin(0, 1).setScrollFactor(0).setDepth(-10);
   }
 
   private createPlatforms(): void {
@@ -100,8 +114,6 @@ export class GameScene extends Phaser.Scene {
         repeat: -1,
       });
     });
-
-    this.hud.totalCoins = this.coins.getLength();
   }
 
   private createDoor(): void {
@@ -161,18 +173,24 @@ export class GameScene extends Phaser.Scene {
   private createColliders(): void {
     this.physics.add.collider(this.alice, this.platforms);
     this.physics.add.collider(this.hazards, this.platforms, this.onHazardLanded, undefined, this);
-    this.physics.add.overlap(this.alice, this.hazards, this.onHitByCard, undefined, this);
     this.physics.add.overlap(this.alice, this.coins, this.onCollectCoin, undefined, this);
+    this.physics.add.overlap(this.alice, this.hazards, this.onHitByCard, undefined, this);
     this.physics.add.overlap(this.alice, this.door, this.onReachDoor, undefined, this);
   }
 
-  private createScoreText(): void {
-    this.scoreText = this.add
-      .text(16, 12, "", { fontFamily: "Georgia, serif", fontSize: "22px", color: "#26364f" })
-      .setScrollFactor(0)
-      .setDepth(30);
+  private createBridge(): void {
+    eventBus.on(GameEvent.SelectSeason, this.onSelectSeason, this);
+    eventBus.on(GameEvent.ToggleMute, this.onToggleMute, this);
+    eventBus.on(GameEvent.RestartRequested, this.onRestartRequested, this);
 
-    this.refreshScoreText();
+    const removeListeners = (): void => {
+      eventBus.off(GameEvent.SelectSeason, this.onSelectSeason, this);
+      eventBus.off(GameEvent.ToggleMute, this.onToggleMute, this);
+      eventBus.off(GameEvent.RestartRequested, this.onRestartRequested, this);
+    };
+
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, removeListeners);
+    this.events.once(Phaser.Scenes.Events.DESTROY, removeListeners);
   }
 
   private handleMovement(): void {
@@ -234,6 +252,8 @@ export class GameScene extends Phaser.Scene {
       this.showSeasonBanner(theme.label);
       playChime(this.sound, theme.chime);
     }
+
+    this.emitHud();
   }
 
   private tweenSkyTo(target: number): void {
@@ -326,6 +346,7 @@ export class GameScene extends Phaser.Scene {
 
     this.hud.coins += 1;
     this.hud.score += COIN_POINTS;
+    if (this.hud.score > this.hud.highScore) this.hud.highScore = this.hud.score;
 
     this.sparkles.explode(10, coin.x, coin.y);
     playTone(this.sound, SEASON_THEMES[this.hud.season].chime[2], 0.14);
@@ -344,7 +365,7 @@ export class GameScene extends Phaser.Scene {
       onComplete: () => popup.destroy(),
     });
 
-    this.refreshScoreText();
+    this.emitHud();
   };
 
   private onHitByCard: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback = (_aliceObject, cardObject) => {
@@ -357,7 +378,7 @@ export class GameScene extends Phaser.Scene {
     this.hud.lives -= 1;
     this.cameras.main.shake(200, 0.01);
     playTone(this.sound, 180, 0.25);
-    this.refreshScoreText();
+    this.emitHud();
 
     if (this.hud.lives <= 0) {
       this.endGame(GameStatus.Lost);
@@ -396,20 +417,36 @@ export class GameScene extends Phaser.Scene {
       playChime(this.sound, [523, 659, 784, 1047]);
     }
 
-    const message = status === GameStatus.Won ? "You reached the door!" : "The Queen's cards got you";
-
-    this.add
-      .text(GAME_WIDTH / 2, GAME_HEIGHT / 2, message, {
-        fontFamily: "Georgia, serif",
-        fontSize: "40px",
-        color: "#ffffff",
-        stroke: "#3b5b8c",
-        strokeThickness: 8,
-      })
-      .setOrigin(0.5)
-      .setScrollFactor(0)
-      .setDepth(30);
+    saveHighScore(this.hud.highScore);
+    this.registry.set(RegistryKey.HighScore, this.hud.highScore);
+    this.emitHud();
   }
+
+  private onSelectSeason = (season: Season): void => {
+    if (this.hud.status !== GameStatus.Playing) return;
+
+    const zone = SEASON_ORDER.indexOf(season);
+    const camera = this.cameras.main;
+
+    camera.fadeOut(250, 255, 255, 255);
+    camera.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
+      this.alice.setPosition(zone * SEASON_WIDTH + 80, GROUND_TOP - 60);
+      this.alice.setVelocity(0, 0);
+      camera.centerOn(this.alice.x, this.alice.y);
+      camera.fadeIn(250, 255, 255, 255);
+    });
+  };
+
+  private onToggleMute = (): void => {
+    const muted = !this.hud.muted;
+    this.sound.mute = muted;
+    this.hud.muted = muted;
+    this.emitHud();
+  };
+
+  private onRestartRequested = (): void => {
+    this.scene.restart();
+  };
 
   private toggleDebug(): void {
     const world = this.physics.world;
@@ -423,7 +460,7 @@ export class GameScene extends Phaser.Scene {
     if (!world.drawDebug) world.debugGraphic.clear();
   }
 
-  private refreshScoreText(): void {
-    this.scoreText.setText(`Score: ${this.hud.score}   Watches: ${this.hud.coins}/${this.hud.totalCoins}   Lives: ${this.hud.lives}`);
+  private emitHud(): void {
+    eventBus.emit(GameEvent.HudChanged, { ...this.hud });
   }
 }
