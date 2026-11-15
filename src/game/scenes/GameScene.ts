@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { SceneKey } from "../keys";
+import { SceneKey, TextureKey } from "../keys";
 
 export class GameScene extends Phaser.Scene {
   constructor() {
@@ -7,14 +7,18 @@ export class GameScene extends Phaser.Scene {
   }
 
   create(): void {
-    const { width, height } = this.scale;
+    const keys: TextureKey[] = [
+      TextureKey.AliceIdle,
+      TextureKey.AliceWalkA,
+      TextureKey.AliceWalkB,
+      TextureKey.AliceJump,
+      TextureKey.Watch,
+      TextureKey.Card,
+      TextureKey.Door,
+    ];
 
-    this.add
-      .text(width / 2, height / 2, "Hello Phaser inside React!", {
-        fontFamily: "Georgia, serif",
-        fontSize: "36px",
-        color: "#3b5b8c",
-      })
-      .setOrigin(0.5);
+    keys.forEach((key, index) => {
+      this.add.image(90 + index * 100, 225, key).setScale(1.6);
+    });
   }
 }
