@@ -1,9 +1,10 @@
 import Phaser from "phaser";
 import { COIN_POINTS, GAME_HEIGHT, GAME_WIDTH, GROUND_HEIGHT, GROUND_TOP, JUMP_SPEED, PLATFORM_HEIGHT, RUN_SPEED, WORLD_WIDTH } from "../config";
-import { GameStatus, SceneKey, TextureKey } from "../keys";
+import { GameStatus, SceneKey, TextureKey,AnimKey } from "../keys";
 import { getCoinPositions, PLATFORMS } from "../levelData";
 import { getInitialHudState } from "../state";
 import type { HudState } from "../types";
+
 
 export class GameScene extends Phaser.Scene {
   private alice!: Phaser.Physics.Arcade.Sprite;
@@ -147,6 +148,15 @@ export class GameScene extends Phaser.Scene {
       this.alice.setFlipX(false);
     } else {
       this.alice.setVelocityX(0);
+    }
+    const onGround = body.blocked.down;
+
+    if (!onGround) {
+    this.alice.anims.play(AnimKey.AliceJump, true);
+    } else if (body.velocity.x !== 0) {
+    this.alice.anims.play(AnimKey.AliceWalk, true);
+    } else {
+    this.alice.anims.play(AnimKey.AliceIdle, true);
     }
 
     const wantsJump = Phaser.Input.Keyboard.JustDown(this.cursors.up) || Phaser.Input.Keyboard.JustDown(this.jumpKey);

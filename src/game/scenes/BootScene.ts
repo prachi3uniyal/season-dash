@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import { SceneKey } from "../keys";
 import { createAllTextures } from "../textures";
+import { createAnimations } from "../animations";
 
 export class BootScene extends Phaser.Scene {
   constructor() {
@@ -23,8 +24,9 @@ export class BootScene extends Phaser.Scene {
     });
   }
 
-  create(): void {
-    createAllTextures(this);
-    this.scene.start(SceneKey.Menu);
-  }
+ create(): void {
+  createAllTextures(this);
+  createAnimations(this.anims);
+  this.scene.start(SceneKey.Menu);
+}
 }
