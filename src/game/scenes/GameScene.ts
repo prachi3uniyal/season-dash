@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { playChime } from "../audio";
+import { playChime, playTone } from "../audio";
 import { COIN_POINTS, GAME_HEIGHT, GAME_WIDTH, GROUND_HEIGHT, GROUND_TOP, HAZARD_SPAWN_DELAY, JUMP_SPEED, PLATFORM_HEIGHT, RUN_SPEED, WORLD_WIDTH } from "../config";
 import { AnimKey, GameStatus, SceneKey, Season, TextureKey } from "../keys";
 import { getCoinPositions, PLATFORMS } from "../levelData";
@@ -18,6 +18,7 @@ export class GameScene extends Phaser.Scene {
   private hills!: Phaser.GameObjects.TileSprite;
   private clouds!: Phaser.GameObjects.TileSprite;
   private scoreText!: Phaser.GameObjects.Text;
+  private sparkles!: Phaser.GameObjects.Particles.ParticleEmitter;
   private weather: Phaser.GameObjects.Particles.ParticleEmitter | undefined;
   private skyTween: Phaser.Tweens.Tween | undefined;
   private currentSky: number = SEASON_THEMES[Season.Spring].sky;
@@ -45,6 +46,7 @@ export class GameScene extends Phaser.Scene {
     this.createDoor();
     this.createAlice();
     this.createHazards();
+    this.createEffects();
     this.createInput();
     this.createColliders();
     this.createScoreText();
@@ -135,10 +137,25 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  private createEffects(): void {
+    this.sparkles = this.add
+      .particles(0, 0, TextureKey.Petal, {
+        speed: { min: 60, max: 200 },
+        scale: { start: 0.8, end: 0 },
+        alpha: { start: 1, end: 0 },
+        lifespan: 450,
+        tint: [0xffd54f, 0xffffff],
+        emitting: false,
+      })
+      .setDepth(8);
+  }
+
   private createInput(): void {
     const keyboard = this.input.keyboard!;
     this.cursors = keyboard.createCursorKeys();
     this.jumpKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+
+    keyboard.on("keydown-D", this.toggleDebug, this);
   }
 
   private createColliders(): void {
@@ -160,24 +177,33 @@ export class GameScene extends Phaser.Scene {
 
   private handleMovement(): void {
     const body = this.alice.body as Phaser.Physics.Arcade.Body;
+    const pointer = this.input.activePointer;
 
-    if (this.cursors.left.isDown) {
+    const touchLeft = pointer.isDown && pointer.x < GAME_WIDTH * 0.33;
+    const touchRight = pointer.isDown && pointer.x > GAME_WIDTH * 0.66;
+    const touchJump = pointer.isDown && !touchLeft && !touchRight;
+
+    const goLeft = this.cursors.left.isDown || touchLeft;
+    const goRight = this.cursors.right.isDown || touchRight;
+    const wantsJump = Phaser.Input.Keyboard.JustDown(this.cursors.up) || Phaser.Input.Keyboard.JustDown(this.jumpKey) || touchJump;
+
+    if (goLeft) {
       this.alice.setVelocityX(-RUN_SPEED);
       this.alice.setFlipX(true);
-    } else if (this.cursors.right.isDown) {
+    } else if (goRight) {
       this.alice.setVelocityX(RUN_SPEED);
       this.alice.setFlipX(false);
     } else {
       this.alice.setVelocityX(0);
     }
 
-    const wantsJump = Phaser.Input.Keyboard.JustDown(this.cursors.up) || Phaser.Input.Keyboard.JustDown(this.jumpKey);
-
-    if (wantsJump && body.blocked.down) {
-      this.alice.setVelocityY(-JUMP_SPEED);
-    }
-
     const onGround = body.blocked.down;
+
+    if (wantsJump && onGround) {
+      this.alice.setVelocityY(-JUMP_SPEED);
+      this.sparkles.explode(6, this.alice.x, this.alice.y + 22);
+      playTone(this.sound, 660, 0.12);
+    }
 
     if (!onGround) {
       this.alice.anims.play(AnimKey.AliceJump, true);
@@ -287,7 +313,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   private onHazardLanded: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback = (hazardObject) => {
-    hazardObject.destroy();
+    const card = hazardObject as Phaser.Physics.Arcade.Sprite;
+    this.sparkles.explode(5, card.x, card.y);
+    card.destroy();
   };
 
   private onCollectCoin: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback = (_aliceObject, coinObject) => {
@@ -298,16 +326,37 @@ export class GameScene extends Phaser.Scene {
 
     this.hud.coins += 1;
     this.hud.score += COIN_POINTS;
+
+    this.sparkles.explode(10, coin.x, coin.y);
+    playTone(this.sound, SEASON_THEMES[this.hud.season].chime[2], 0.14);
+
+    const popup = this.add
+      .text(coin.x, coin.y, `+${COIN_POINTS}`, { fontFamily: "Georgia, serif", fontSize: "22px", color: "#fff59d", stroke: "#333333", strokeThickness: 4 })
+      .setOrigin(0.5)
+      .setDepth(9);
+
+    this.tweens.add({
+      targets: popup,
+      y: coin.y - 50,
+      alpha: 0,
+      duration: 600,
+      ease: "Cubic.easeOut",
+      onComplete: () => popup.destroy(),
+    });
+
     this.refreshScoreText();
   };
 
   private onHitByCard: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback = (_aliceObject, cardObject) => {
-    cardObject.destroy();
+    const card = cardObject as Phaser.Physics.Arcade.Sprite;
+    this.sparkles.explode(8, card.x, card.y);
+    card.destroy();
 
     if (this.isInvulnerable || this.hud.status !== GameStatus.Playing) return;
 
     this.hud.lives -= 1;
     this.cameras.main.shake(200, 0.01);
+    playTone(this.sound, 180, 0.25);
     this.refreshScoreText();
 
     if (this.hud.lives <= 0) {
@@ -343,6 +392,8 @@ export class GameScene extends Phaser.Scene {
 
     if (status === GameStatus.Lost) {
       this.alice.setTint(0xff6b6b);
+    } else {
+      playChime(this.sound, [523, 659, 784, 1047]);
     }
 
     const message = status === GameStatus.Won ? "You reached the door!" : "The Queen's cards got you";
@@ -358,6 +409,18 @@ export class GameScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setScrollFactor(0)
       .setDepth(30);
+  }
+
+  private toggleDebug(): void {
+    const world = this.physics.world;
+
+    if (!world.debugGraphic) {
+      world.createDebugGraphic();
+      return;
+    }
+
+    world.drawDebug = !world.drawDebug;
+    if (!world.drawDebug) world.debugGraphic.clear();
   }
 
   private refreshScoreText(): void {
